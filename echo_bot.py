@@ -1,63 +1,79 @@
-# 📁 bot.py
-
 import os
-import requests
 import telebot
-from langdetect import detect
+import requests
 
-# 🔐 Zmienne środowiskowe
+# 🔐 Load secrets from environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# 🔧 Inicjalizacja bota
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# 🧠 Funkcja: zapytanie do Groq AI
-def ask_groq(prompt, lang="en"):
+# 📱 Main menu keyboard
+menu_keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+menu_keyboard.row('🗳️ Vote', '📊 Results')
+menu_keyboard.row('🔄 Reset Votes', '🧠 Ask AI')
+
+# 📊 Voting storage
+votes = {}
+
+# 🧠 AI function using Groq API
+def ask_groq(message_text):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-
-    system_prompt = {
-        "role": "system",
-        "content": f"You are a helpful assistant. Reply in {lang.upper()} language."
-    }
-
     data = {
-        "model": "llama3-8b-8192",
-        "messages": [
-            system_prompt,
-            {"role": "user", "content": prompt}
-        ]
+        "model": "mixtral-8x7b-32768",
+        "messages": [{"role": "user", "content": message_text}],
+        "temperature": 0.7
     }
-
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
         return response.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"❌ AI error: {str(e)}"
+    else:
+        return "❌ AI error: failed to get a response."
 
-# 🌍 Funkcja: wykrywanie języka
-def detect_language(text):
-    try:
-        lang = detect(text)
-        return lang
-    except:
-        return "en"
+# 🚀 Start command
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "👋 Welcome! Choose an option below:", reply_markup=menu_keyboard)
 
-# 📩 Funkcja: obsługa wiadomości
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    user_input = message.text
-    user_lang = detect_language(user_input)
-    bot.send_chat_action(message.chat.id, 'typing')
-    ai_response = ask_groq(user_input, lang=user_lang)
-    bot.send_message(message.chat.id, ai_response)
+# 🗳️ Voting
+@bot.message_handler(func=lambda m: m.text == '🗳️ Vote')
+def vote(message):
+    user_id = message.from_user.id
+    votes[user_id] = votes.get(user_id, 0) + 1
+    bot.send_message(message.chat.id, "✅ Your vote has been recorded.")
 
-# 🚀 Funkcja: uruchomienie bota
-if __name__ == "__main__":
-    print("✅ Bot is running with Groq AI and language detection...")
-    bot.polling()
+# 📊 Show results
+@bot.message_handler(func=lambda m: m.text == '📊 Results')
+def results(message):
+    total_votes = sum(votes.values())
+    bot.send_message(message.chat.id, f"📊 Total votes: {total_votes}")
+
+# 🔄 Reset votes (admin only)
+@bot.message_handler(func=lambda m: m.text == '🔄 Reset Votes')
+def reset_votes(message):
+    if message.from_user.id == ADMIN_ID:
+        votes.clear()
+        bot.send_message(message.chat.id, "🔄 All votes have been reset.")
+    else:
+        bot.send_message(message.chat.id, "⛔ Only the admin can reset votes.")
+
+# 🧠 Ask AI — prompt user to type question
+@bot.message_handler(func=lambda m: m.text == '🧠 Ask AI')
+def ask_ai(message):
+    bot.send_message(message.chat.id, "🧠 Please type your question for the AI:")
+
+# 💬 Handle all other messages as AI questions
+@bot.message_handler(func=lambda m: True)
+def handle_ai(message):
+    if message.text not in ['🗳️ Vote', '📊 Results', '🔄 Reset Votes', '🧠 Ask AI']:
+        reply = ask_groq(message.text)
+        bot.send_message(message.chat.id, reply)
+
+# ▶️ Run the bot
+print("✅ Bot is running... Waiting for messages on Telegram.")
+bot.polling()
