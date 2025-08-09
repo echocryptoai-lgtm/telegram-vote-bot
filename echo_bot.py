@@ -1,61 +1,63 @@
+# 📁 bot.py
+
 import os
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import requests
+import telebot
+from langdetect import detect
 
-TOKEN = os.getenv("BOT_TOKEN")
+# 🔐 Zmienne środowiskowe
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-votes = {"yes": 0, "no": 0, "abstain": 0}
+# 🔧 Inicjalizacja bota
+bot = telebot.TeleBot(BOT_TOKEN)
 
-menu_keyboard = [
-    ['🗳️ Vote', '📊 Results'],
-    ['🔄 Reset Votes', '🤖 Ask AI'],
-    ['💰 Token Price']
-]
-menu_markup = ReplyKeyboardMarkup(menu_keyboard, resize_keyboard=True)
+# 🧠 Funkcja: zapytanie do Groq AI
+def ask_groq(prompt, lang="en"):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-vote_keyboard = [['✅ YES', '❌ NO'], ['🤔 ABSTAIN']]
-vote_markup = ReplyKeyboardMarkup(vote_keyboard, resize_keyboard=True)
+    system_prompt = {
+        "role": "system",
+        "content": f"You are a helpful assistant. Reply in {lang.upper()} language."
+    }
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Welcome to EchoAI Bot! Please choose an option:", reply_markup=menu_markup)
+    data = {
+        "model": "llama3-8b-8192",
+        "messages": [
+            system_prompt,
+            {"role": "user", "content": prompt}
+        ]
+    }
 
-async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🗳️ Please cast your vote:", reply_markup=vote_markup)
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"❌ AI error: {str(e)}"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# 🌍 Funkcja: wykrywanie języka
+def detect_language(text):
+    try:
+        lang = detect(text)
+        return lang
+    except:
+        return "en"
 
-    if text == '🗳️ Vote':
-        await vote(update, context)
-    elif text == '📊 Results':
-        await update.message.reply_text(
-            f"📊 Current results:\n✅ YES: {votes['yes']}\n❌ NO: {votes['no']}\n🤔 ABSTAIN: {votes['abstain']}"
-        )
-    elif text == '🔄 Reset Votes':
-        votes["yes"] = 0
-        votes["no"] = 0
-        votes["abstain"] = 0
-        await update.message.reply_text("🔄 All votes have been reset.")
-    elif text == '🤖 Ask AI':
-        await update.message.reply_text("🧠 Please type your question for the AI. (Feature coming soon!)")
-    elif text == '💰 Token Price':
-        await update.message.reply_text("💰 Token price feature coming soon!")
-    elif text == '✅ YES':
-        votes["yes"] += 1
-        await update.message.reply_text("✅ You voted YES.")
-    elif text == '❌ NO':
-        votes["no"] += 1
-        await update.message.reply_text("❌ You voted NO.")
-    elif text == '🤔 ABSTAIN':
-        votes["abstain"] += 1
-        await update.message.reply_text("🤔 You chose to abstain.")
-    else:
-        await update.message.reply_text("❓ I didn't understand that. Please use the menu.")
+# 📩 Funkcja: obsługa wiadomości
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    user_input = message.text
+    user_lang = detect_language(user_input)
+    bot.send_chat_action(message.chat.id, 'typing')
+    ai_response = ask_groq(user_input, lang=user_lang)
+    bot.send_message(message.chat.id, ai_response)
 
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("vote", vote))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ Bot is running...")
-    app.run_polling()
+# 🚀 Funkcja: uruchomienie bota
+if __name__ == "__main__":
+    print("✅ Bot is running with Groq AI and language detection...")
+    bot.polling()
